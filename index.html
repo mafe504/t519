@@ -331,18 +331,19 @@ Powerful Idea: ${powerfulIdea}
                     "required": ["usefulAnalysis", "interconnectedAnalysis", "intuitiveAnalysis", "overallAssessment", "passed"]
                 };
 
-                try {
-                    const parsedJson = await fetchWithBackoff(systemPrompt, userQuery, schema);
-                    displayResults(parsedJson);
-                } catch (error) {
-                    console.error(error);
-                    resultsLoading.innerHTML = `<p class="text-red-600">An error occurred. Please try again.</p>`;
-                } finally {
-                    button.disabled = false;
-                    button.textContent = 'Analyze My Idea';
-                    resultsLoading.classList.add('hidden');
-                    resultsContent.classList.remove('hidden');
-                }
+                    try {
+                        const parsedJson = await fetchWithBackoff(systemPrompt, userQuery, schema);
+                        displayResults(parsedJson);
+                    } catch (error) {
+                        console.error(error);
+                        // More helpful error message when backend is missing or returns an error
+                        resultsLoading.innerHTML = `<p class="text-red-600">An error occurred: ${error.message || 'Unknown error'}.<br><strong>Note:</strong> This demo requires a backend proxy to securely call the Google AI API. See README.md for setup instructions.</p>`;
+                    } finally {
+                        button.disabled = false;
+                        button.textContent = 'Analyze My Idea';
+                        resultsLoading.classList.add('hidden');
+                        resultsContent.classList.remove('hidden');
+                    }
             }
 
             function displayResults(data) {
@@ -411,45 +412,50 @@ Powerful Idea: ${powerfulIdea}
                 }
             }
 
+            // Backoff-enabled fetch that calls a secure backend proxy instead of the Google API directly from the browser.
+            // Configure your backend and set `window.BACKEND_URL` (see README.md). The backend will add the secret API key.
             async function fetchWithBackoff(systemPrompt, userQuery, schema, maxRetries = 3) {
+                const BACKEND_URL = window.BACKEND_URL || '';
+
+                if (!BACKEND_URL) {
+                    // Provide a clear actionable error so site visitors and developers know what's missing.
+                    throw new Error('BACKEND_URL is not configured. This frontend must call a secure backend proxy that holds your Google API key. See README.md for setup instructions.');
+                }
+
                 let delay = 1000;
                 for (let i = 0; i < maxRetries; i++) {
                     try {
-                        const apiKey = ""; 
-                        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-                        
                         const payload = {
-                            contents: [{ parts: [{ text: userQuery }] }],
-                            systemInstruction: {
-                                parts: [{ text: systemPrompt }]
-                            },
-                            generationConfig: {
-                                responseMimeType: "application/json",
-                                responseSchema: schema,
-                                temperature: 0.3
-                            }
+                            systemPrompt,
+                            userQuery,
+                            schema,
+                            generationConfig: { temperature: 0.3 }
                         };
-                        
-                        const response = await fetch(apiUrl, {
+
+                        const response = await fetch(`${BACKEND_URL.replace(/\/$/, '')}/api/generate`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(payload)
                         });
 
                         if (!response.ok) {
-                            throw new Error(`HTTP error! status: ${response.status}`);
+                            const text = await response.text().catch(() => '');
+                            throw new Error(`Backend error: ${response.status} ${response.statusText} ${text}`);
                         }
 
                         const result = await response.json();
-                        
+
+                        // The backend proxies the Google response; keep the existing parsing logic.
                         if (result.candidates && result.candidates.length > 0 &&
                             result.candidates[0].content && result.candidates[0].content.parts &&
                             result.candidates[0].content.parts.length > 0) {
-                            
+
                             const jsonText = result.candidates[0].content.parts[0].text;
                             return JSON.parse(jsonText);
+                        } else if (result.error) {
+                            throw new Error(result.error.message || JSON.stringify(result.error));
                         } else {
-                            throw new Error('Invalid AI response structure');
+                            throw new Error('Invalid AI response structure from backend');
                         }
 
                     } catch (error) {
