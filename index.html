@@ -332,7 +332,14 @@ Powerful Idea: ${powerfulIdea}
                 };
 
                 try {
-                    const parsedJson = await fetchWithBackoff(systemPrompt, userQuery, schema);
+                        // pass the collected answers to allow local demo/mock mode when no API key is set
+                        const parsedJson = await fetchWithBackoff(systemPrompt, userQuery, schema, 3, {
+                            projectDescription,
+                            powerfulIdea,
+                            usefulAnswer,
+                            interconnectedAnswer,
+                            intuitiveAnswer
+                        });
                     displayResults(parsedJson);
                 } catch (error) {
                     console.error(error);
@@ -411,13 +418,73 @@ Powerful Idea: ${powerfulIdea}
                 }
             }
 
-            async function fetchWithBackoff(systemPrompt, userQuery, schema, maxRetries = 3) {
+            function generateMockResponse(inputs = {}, schema) {
+                // Simple client-side heuristic analyzer for demo/public mode.
+                const useful = (inputs.usefulAnswer || '').trim();
+                const interconnected = (inputs.interconnectedAnswer || '').trim();
+                const intuitive = (inputs.intuitiveAnswer || '').trim();
+
+                function assess(text, label) {
+                    if (!text || text.length < 40) {
+                        return {
+                            text: `Needs Work: The ${label} justification is short or missing. Give a concrete example, explicitly connect it to learning outcomes, and explain why it's useful for a child.`,
+                            pass: false
+                        };
+                    }
+
+                    // simple keyword boost
+                    const keywords = ['example', 'children', 'learn', 'understand', 'apply', 'connect', 'practice', 'explore'];
+                    const hasKeyword = keywords.some(k => text.toLowerCase().includes(k));
+
+                    return {
+                        text: `Pass: Solid justification.${hasKeyword ? ' Nice use of concrete language.' : ''} Consider adding a short example to make it even stronger.`,
+                        pass: true
+                    };
+                }
+
+                const a1 = assess(useful, 'Personally Useful');
+                const a2 = assess(interconnected, 'Interconnected');
+                const a3 = assess(intuitive, 'Intuitive');
+
+                const passed = a1.pass && a2.pass && a3.pass;
+                const overall = passed
+                    ? 'This project clearly passes the Seymour Test. Good job — add one brief example per criterion to make the case even stronger.'
+                    : 'This is a good start but needs more concrete justification in one or more criteria. Expand the weaker answers with examples or explicit connections to other domains.';
+
+                return {
+                    usefulAnalysis: a1.text,
+                    interconnectedAnalysis: a2.text,
+                    intuitiveAnalysis: a3.text,
+                    overallAssessment: overall,
+                    passed
+                };
+            }
+
+            async function fetchWithBackoff(systemPrompt, userQuery, schema, maxRetries = 3, inputs = null) {
+                // If no API key is provided, run a safe local demo (no secrets exposed).
+                const apiKey = "";
+                if (!apiKey || apiKey.trim() === '') {
+                    try {
+                        // show a small demo-mode note to users
+                        if (resultsLoading) {
+                            const note = document.createElement('p');
+                            note.className = 'text-sm text-stone-500 mt-3';
+                            note.textContent = 'Running in demo mode — analysis is generated locally for demonstration. To use a real model, deploy a server proxy with your API key.';
+                            resultsLoading.appendChild(note);
+                        }
+                        // generate a deterministic mock response based on the user's inputs
+                        return generateMockResponse(inputs || {}, schema);
+                    } catch (e) {
+                        throw new Error('Demo analysis failed: ' + e.message);
+                    }
+                }
+
+                // Real API path (kept as before). Uses exponential backoff on errors.
                 let delay = 1000;
                 for (let i = 0; i < maxRetries; i++) {
                     try {
-                        const apiKey = ""; 
                         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-                        
+
                         const payload = {
                             contents: [{ parts: [{ text: userQuery }] }],
                             systemInstruction: {
@@ -429,7 +496,7 @@ Powerful Idea: ${powerfulIdea}
                                 temperature: 0.3
                             }
                         };
-                        
+
                         const response = await fetch(apiUrl, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -441,11 +508,11 @@ Powerful Idea: ${powerfulIdea}
                         }
 
                         const result = await response.json();
-                        
+
                         if (result.candidates && result.candidates.length > 0 &&
                             result.candidates[0].content && result.candidates[0].content.parts &&
                             result.candidates[0].content.parts.length > 0) {
-                            
+
                             const jsonText = result.candidates[0].content.parts[0].text;
                             return JSON.parse(jsonText);
                         } else {
